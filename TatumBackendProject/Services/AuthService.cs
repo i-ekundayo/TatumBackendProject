@@ -12,19 +12,19 @@ namespace TatumBackendProject.Services
 {
     public interface IAuthService
     {
-        //Task<ApiResponse<LoginResponseDto>> LoginAsync(
-        //    LoginRequestDto request,
-        //    CancellationToken ct = default);
-        
+        Task<ApiResponse<UserDto>> LoginAsync(
+            LoginRequestDto request,
+            CancellationToken ct = default);
+
         Task<ApiResponse<UserDto>> RegisterAsync(
             RegisterRequestDto request,
-            CancellationToken ct= default);
+            CancellationToken ct = default);
 
-        //Task<ApiResponse<UserDto>> VerifyRegistrationOtpAsync(
-        //    VerifyRegistrationOtpRequestDto request,
-        //    CancellationToken ct= default);
+        Task<ApiResponse<UserDto>> VerifyRegistrationOtpAsync(
+            VerifyRegistrationOtpRequestDto request,
+            CancellationToken ct = default);
     }
-    public class AuthService: IAuthService
+    public class AuthService : IAuthService
     {
         private readonly IUserRepository _userRepository;
         private readonly IAccountRepository _accountRepository;
@@ -35,7 +35,7 @@ namespace TatumBackendProject.Services
         private readonly IConfiguration _configuration;
 
         public AuthService(
-            IUserRepository userRepository, IConfiguration configuration, 
+            IUserRepository userRepository, IConfiguration configuration,
             JwtService jwtService, IOptions<EmailSettings> emailOptions, IAccountRepository accountRepository,
             IOptions<JwtSettings> options, INotificationService notificationService)
         {
@@ -58,7 +58,8 @@ namespace TatumBackendProject.Services
             // VALIDATION
             // ===============================
 
-            if (string.IsNullOrWhiteSpace(email)) {
+            if (string.IsNullOrWhiteSpace(email))
+            {
                 return ApiResponse<UserDto>.Fail(
                     "Email is required.",
                     new List<ApiError>
@@ -88,8 +89,8 @@ namespace TatumBackendProject.Services
 
             var existingUser = await _userRepository.GetByEmailAsync(email);
 
-                
-            if(existingUser != null)
+
+            if (existingUser != null)
             // Allow an unverified registration to reques
             // another OTP instead of creating another user.
             {
@@ -101,7 +102,7 @@ namespace TatumBackendProject.Services
                         {
                             new(
                                 "RegistrationPending",
-                                "A registration already exists for thies email. Please verify the OTP.")
+                                "A registration already exists for this email. Please verify the OTP.")
                         });
                 }
 
@@ -112,71 +113,249 @@ namespace TatumBackendProject.Services
                             "EmailExists",
                             "An account with this email already exists.")
                     });
-                }
+            }
 
-                // ==============================
-                // GENERATE OTP
-                // ==============================
+            // ==============================
+            // GENERATE OTP
+            // ==============================
 
-                var otp = GenerateOtp();
+            var otp = GenerateOtp();
 
-                var user = new Entities.User
-                {
-                    Id = Guid.NewGuid(),
-                    Email = email,
-                    Phone = phone,
-                    FirstName = request.FirstName?.Trim(),
-                    LastName = request.LastName?.Trim(),
-                    PasswordHash = HashPassword(request.Password),
-                    Role = UserRoles.Customer,
+            var user = new Entities.User
+            {
+                Id = Guid.NewGuid(),
+                Email = email,
+                Phone = phone,
+                FirstName = request.FirstName?.Trim(),
+                LastName = request.LastName?.Trim(),
+                PasswordHash = HashPassword(request.Password),
+                Role = UserRoles.Customer,
 
-                    // IMPORTANT:
-                    // Customer is not active until OTP verification.
-                    IsActive = false,
-                    IsRegistrationVerified = false,
-                    RegistrationOtp = otp,
-                    RegistrationOtpExpiresAt = DateTime.UtcNow.AddMinutes(10),
-                    OtpAttempts = 0,
-                    CreatedAt = DateTime.UtcNow,
-                };
+                // IMPORTANT:
+                // Customer is not active until OTP verification.
+                IsActive = false,
+                IsRegistrationVerified = false,
+                RegistrationOtp = otp,
+                RegistrationOtpExpiresAt = DateTime.UtcNow.AddMinutes(10),
+                OtpAttempts = 0,
+                CreatedAt = DateTime.UtcNow,
+            };
 
-                await _userRepository.AddAsync(user);
+            await _userRepository.AddAsync(user);
 
+            await _userRepository.SaveChangesAsync(ct);
+
+            // ==============================
+            // SEND OTP
+            // ==============================
+
+            await SendRegistrationOtpAsync(
+                user,
+                otp,
+                ct);
+
+            // ==============================
+            // RESPONSE
+            // ==============================
+
+            return ApiResponse<UserDto>.Ok(
+                MapToDto(user),
+                "Registration initiated successfully. " +
+                "A verification code has been sent to your eamil and phone.");
+        }
+
+        public async Task<ApiResponse<UserDto>> LoginAsync(LoginRequestDto request, CancellationToken ct = default)
+        {
+            var email = request.Email.Trim().ToLowerInvariant();
+            var password = request.Password;
+
+            //validation
+
+            if (string.IsNullOrWhiteSpace(email))
+            {
+                return ApiResponse<UserDto>.Fail("Email is required", new List<ApiError> { new("InvalidEmail", "Email is required") });
+            }
+
+            if (string.IsNullOrWhiteSpace(password))
+            {
+                return ApiResponse<UserDto>.Fail("Password is required", new List<ApiError> { new("InvalidPassword", "Password is required") });
+            }
+
+            //Check if user exists
+
+            var user = await _userRepository.GetByEmailAsync(email);
+            if (user == null)
+            {
+                return ApiResponse<UserDto>.Fail("Invalid email or password", new List<ApiError> { new("InvalidCredentials", "Invalid email or password") });
+            }
+
+            //Check registration verified
+
+            //if (!user.IsRegistrationVerified)
+            //{
+            //    return ApiResponse<UserDto>.Fail("Registration is pending verification", new List<ApiError> { new("RegistrationPending", "Please verify the OTP sent to your email or phone") });
+            //}
+
+            //Verify password
+
+            if (!VerifyPassword(password, user.PasswordHash))
+            {
+                return ApiResponse<UserDto>.Fail("Invalid email or password", new List<ApiError> { new("InvalidCredentials", "Invalid email or password") });
+            }
+
+            //Response
+
+            return ApiResponse<UserDto>.Ok(
+                MapToDto(user),
+                "Login successful"
+                );
+        }
+
+        public async Task<ApiResponse<UserDto>> VerifyRegistrationOtpAsync(
+    VerifyRegistrationOtpRequestDto request,
+    CancellationToken ct = default)
+        {
+            var email = request.Email.Trim().ToLowerInvariant();
+            var otp = request.Otp?.Trim();
+
+            // ===============================
+            // VALIDATION
+            // ===============================
+
+            if (string.IsNullOrWhiteSpace(email))
+            {
+                return ApiResponse<UserDto>.Fail(
+                    "Email is required.",
+                    new List<ApiError>
+                    {
+                new("InvalidEmail", "Email is required.")
+                    });
+            }
+
+            if (string.IsNullOrWhiteSpace(otp))
+            {
+                return ApiResponse<UserDto>.Fail(
+                    "Verification code is required.",
+                    new List<ApiError>
+                    {
+                new("InvalidOtp", "Verification code is required.")
+                    });
+            }
+
+            // ===============================
+            // CHECK USER EXISTS
+            // ===============================
+
+            var user = await _userRepository.GetByEmailAsync(email);
+
+            if (user == null)
+            {
+                return ApiResponse<UserDto>.Fail(
+                    "Invalid email or verification code.",
+                    new List<ApiError>
+                    {
+                new("InvalidCredentials", "Invalid email or verification code.")
+                    });
+            }
+
+            // ===============================
+            // ALREADY VERIFIED
+            // ===============================
+
+            if (user.IsRegistrationVerified)
+            {
+                return ApiResponse<UserDto>.Fail(
+                    "This account has already been verified.",
+                    new List<ApiError>
+                    {
+                new("AlreadyVerified", "This account has already been verified.")
+                    });
+            }
+
+            // ===============================
+            // CHECK OTP EXPIRY
+            // ===============================
+
+            if (user.RegistrationOtpExpiresAt == null ||
+                user.RegistrationOtpExpiresAt < DateTime.UtcNow)
+            {
+                return ApiResponse<UserDto>.Fail(
+                    "Verification code has expired. Please request a new one.",
+                    new List<ApiError>
+                    {
+                new("OtpExpired", "Verification code has expired. Please request a new one.")
+                    });
+            }
+
+            // ===============================
+            // CHECK ATTEMPT LIMIT
+            // ===============================
+
+            const int maxOtpAttempts = 5;
+
+            if (user.OtpAttempts >= maxOtpAttempts)
+            {
+                return ApiResponse<UserDto>.Fail(
+                    "Too many failed attempts. Please request a new verification code.",
+                    new List<ApiError>
+                    {
+                new("TooManyAttempts", "Too many failed attempts. Please request a new verification code.")
+                    });
+            }
+
+            // ===============================
+            // VERIFY OTP
+            // ===============================
+
+            if (user.RegistrationOtp != otp)
+            {
+                user.OtpAttempts += 1;
                 await _userRepository.SaveChangesAsync(ct);
 
-                // ==============================
-                // SEND OTP
-                // ==============================
-
-                await SendRegistrationOtpAsync(
-                    user,
-                    otp,
-                    ct);
-
-                // ==============================
-                // RESPONSE
-                // ==============================
-
-                return ApiResponse<UserDto>.Ok(
-                    MapToDto(user),
-                    "Registration initiated successfully. " +
-                    "A verification code has been sent to your eamil and phone.");
+                return ApiResponse<UserDto>.Fail(
+                    "Invalid verification code.",
+                    new List<ApiError>
+                    {
+                new("InvalidOtp", "Invalid verification code.")
+                    });
             }
 
-            private static string GenerateOtp()
-            {
-                return RandomNumberGenerator
-                    .GetInt32(100000, 1000000)
-                    .ToString();
-            }
+            // ===============================
+            // MARK AS VERIFIED
+            // ===============================
 
-            private async Task SendRegistrationOtpAsync(
-                Entities.User user,
-                string otp,
-                CancellationToken ct)
-            {
-                var subject = "TatumConnect Registration Verification";
-                var message = $"""
+            user.IsRegistrationVerified = true;
+            user.IsActive = true;
+            user.RegistrationOtp = null;
+            user.RegistrationOtpExpiresAt = null;
+            user.OtpAttempts = 0;
+
+            await _userRepository.SaveChangesAsync(ct);
+
+            // ===============================
+            // RESPONSE
+            // ===============================
+
+            return ApiResponse<UserDto>.Ok(
+                MapToDto(user),
+                "Registration verified successfully. You can now log in.");
+        }
+
+
+        private static string GenerateOtp()
+        {
+            return RandomNumberGenerator
+                .GetInt32(100000, 1000000)
+                .ToString();
+        }
+
+        private async Task SendRegistrationOtpAsync(
+            Entities.User user,
+            string otp,
+            CancellationToken ct)
+        {
+            var subject = "TatumConnect Registration Verification";
+            var message = $"""
                     Hello {user.FirstName},
                
                     Welcome to TatumConnect.
@@ -193,26 +372,26 @@ namespace TatumBackendProject.Services
                     TatumConnect
                     """;
 
-                // ==============================
-                // EMAIL
-                // ==============================
+            // ==============================
+            // EMAIL
+            // ==============================
 
-                await _notificationService.SendEmailAsync(
-                    user.Email,
-                    subject,
-                    message,
-                    ct);
+            await _notificationService.SendEmailAsync(
+                user.Email,
+                subject,
+                message,
+                ct);
 
-                // ==============================
-                // PHONE / SMS
-                // ==============================
+            // ==============================
+            // PHONE / SMS
+            // ==============================
 
-                // await _notificationService.SendSmsAsync(
-                //     user.Phone!,
-                //     $"Your TatumConnect verification code is {otp}. It expires in 10 minutes.",
-                //      ct)
-            }
-        
+            // await _notificationService.SendSmsAsync(
+            //     user.Phone!,
+            //     $"Your TatumConnect verification code is {otp}. It expires in 10 minutes.",
+            //      ct)
+        }
+
 
         private static UserDto MapToDto(User user)
         {

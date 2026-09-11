@@ -41,5 +41,27 @@ namespace TatumBackendProject.Controllers
                 return BadRequest("An error occured");
             }
         }
+
+        [HttpPost("login")]
+        [AllowAnonymous]
+        public async Task<IActionResult> Login([FromBody] LoginRequestDto request, CancellationToken ct)
+        {
+            try
+            {
+                var response = await _auth.LoginAsync(request, ct);
+
+                if (!response.Success)
+                {
+                    return Conflict(response);
+                }
+
+                return Ok(response);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex);
+                return BadRequest("An error occured");
+            }
+        }
     }
 }
