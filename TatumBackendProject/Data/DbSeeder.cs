@@ -15,7 +15,7 @@ namespace TatumBackendProject.Data
 
         private static async Task SeedSuperAdminAsync(AppDbContext context)
         {
-            const string email = "speradmin@tatumconnect.com";
+            const string email = "superadmin@tatumconnect.com";
             var existinguser = await context.Users.FirstOrDefaultAsync(u => u.Email == email);
             if (existinguser != null) return;
 
@@ -53,6 +53,43 @@ namespace TatumBackendProject.Data
             var hash = sha.ComputeHash(bytes);
 
             return Convert.ToBase64String(hash);
+        }
+
+        private static async Task<string> GenerateStaffIdAsync(
+            AppDbContext context)
+        {
+            var year = DateTime.UtcNow.Year;
+
+            var lastStaffId =
+                await context.Users
+                    .Where(u =>
+                        u.StaffId != null &&
+                        u.StaffId.StartsWith(
+                            $"STF-{year}-"))
+                    .OrderByDescending(
+                        u => u.StaffId)
+                    .Select(u => u.StaffId)
+                    .FirstOrDefaultAsync();
+
+            var nextNumber = 1;
+
+            if (!string.IsNullOrWhiteSpace(lastStaffId))
+            {
+                var numberPart =
+                    lastStaffId
+                        .Split('-')
+                        .Last();
+
+                if (int.TryParse(
+                    numberPart,
+                    out var currentNumber))
+                {
+                    nextNumber =
+                        currentNumber + 1;
+                }
+            }
+
+            return $"STF-{year}-{nextNumber:D6}";
         }
     }
 }
