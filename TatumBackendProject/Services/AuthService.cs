@@ -250,5 +250,20 @@ namespace TatumBackendProject.Services
         {
             return HashPassword(password) == passwordHash;
         }
+
+        private async Task<string> GenerateAccountNumberAsync(){
+            while (true) {
+                var accountNumber = RandomNumberGenerator.GetInt32(10000000, 100000000).ToString();
+
+                //var exists = await _accountRepository.ExistsByAccountNumberAsync(accountNumber);
+
+                var exists = await _accountRepository.GetFilteredAsync(accountNumber: accountNumber);
+
+                if (!exists.Any())
+                {
+                    return accountNumber;
+                }
+            }
+        }
     }
 }
