@@ -8,7 +8,7 @@ using TatumBackendProject.Auth;
 using TatumBackendProject.Common.Constants;
 using TatumBackendProject.Services;
 
-var builder = WebApplication.CreateBuilder(args);
+WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 
